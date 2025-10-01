@@ -16,7 +16,7 @@
 
 // ---------------- Design Constants ----------------
 #define LINE_LENGTH 100 // max # of characters in an input line
-#define MAX_ARGS 5      // max # of args to a command (not incl. command name)
+#define MAX_ARGS 20      // max # of args to a command (not incl. command name)
 #define MAX_LENGTH 20   // max # of characters in an argument
 
 // --- Job Control Data Structure ---
@@ -46,6 +46,7 @@ extern char **environ;
 static void setup_signal_handlers(void);
 static void sigchld_handler(int);
 static void sigint_handler(int);
+static void sigtstp_handler(int);
 static void add_process(pid_t pid, char state, const char *cmd);
 static void remove_process(pid_t pid);
 static void update_process_state(pid_t pid, char state);
@@ -172,6 +173,7 @@ static void setup_signal_handlers(void)
   struct sigaction sa;
   sigemptyset(&sa.sa_mask);
   sa.sa_flags = SA_RESTART; // Restart slow system calls interrupted by a signal
+  sa.sa_handler = SIG_IGN;
 
   // SIGCHLD: Mandatory for job control. The shell must handle child termination/state changes.
   sa.sa_handler = sigchld_handler;
@@ -184,7 +186,7 @@ static void setup_signal_handlers(void)
 // SIGTSTP (Ctrl-Z): The shell must ignore this signal. The terminal driver (TTY) sends
   // SIGTSTP to the *foreground* process group, which includes the job itself. Ignoring it
   // ensures the shell doesn't suspend while a job is running, allowing it to manage the job's suspension.
-   sa.sa_handler = SIG_IGN; 
+   sa.sa_handler = sigtstp_handler; 
   sigaction(SIGTSTP, &sa, NULL);
 
 // SIGTTOU and SIGTTIN: Ignored to prevent the shell from stopping if a job attempts
@@ -240,6 +242,19 @@ static void sigint_handler(int sig)
   else if (foreground_pid > 0) // Fallback for single-process job without a dedicated group
   {
     kill(foreground_pid, SIGINT);
+  }
+}
+
+static void sigtstp_handler(int sig)
+{
+  (void)sig;
+  if (foreground_pgid > 0)
+  {
+    kill(-foreground_pgid, SIGTSTP); // Send to the entire foreground process group
+  }
+  else if (foreground_pid > 0) // Fallback for single-process job without a dedicated group
+  {
+    kill(foreground_pid, SIGTSTP);
   }
 }
 
@@ -457,15 +472,46 @@ static void build_cmd_str(char *dst, size_t cap,
  * @param pgid The process group ID to set as the foreground group.
  * @return 0 on success, -1 on failure.
  */
+// static int set_foreground_pgid(pid_t pgid)
+// {
+//     // TIOCSPGRP is the ioctl request code to set the foreground process group ID.
+//     // The ioctl(2) system call is documented in Section 2.
+//     if (ioctl(STDIN_FILENO, TIOCSPGRP, &pgid) < 0) {
+//         perror("ioctl (set TTY pgrp)");
+//         return -1;
+//     }
+//     return 0;
+// }
+
 static int set_foreground_pgid(pid_t pgid)
 {
-    // TIOCSPGRP is the ioctl request code to set the foreground process group ID.
-    // The ioctl(2) system call is documented in Section 2.
-    if (ioctl(STDIN_FILENO, TIOCSPGRP, &pgid) < 0) {
-        perror("ioctl (set TTY pgrp)");
-        return -1;
+    int fd = STDIN_FILENO;
+    int r;
+
+retry_ioctl:
+    r = ioctl(fd, TIOCSPGRP, &pgid);
+    if (r == 0) return 0;
+
+    // If STDIN isn't a tty or is invalid, fall back to /dev/tty
+    if (errno == ENOTTY || errno == EBADF) {
+        int ttyfd = open("/dev/tty", O_RDWR);
+        if (ttyfd < 0) {
+            // No controlling tty available
+            perror("open(/dev/tty)");
+            return -1;
+        }
+        r = ioctl(ttyfd, TIOCSPGRP, &pgid);
+        int saved = errno;
+        close(ttyfd);
+        if (r == 0) return 0;
+        errno = saved;
+    } else if (errno == EINTR) {
+        goto retry_ioctl;
     }
-    return 0;
+
+    // Common macOS failures: EPERM (not same session / not ready), EINVAL
+    perror("ioctl(TIOCSPGRP)");
+    return -1;
 }
 
 /**
@@ -566,8 +612,6 @@ static void execute_external(char **argv, int background,
     foreground_pgid = pid;
 
   set_foreground_pgid(foreground_pgid);
-
- 
 
     int status;
     for (;;)
