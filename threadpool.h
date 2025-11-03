@@ -1,4 +1,5 @@
 // You can modify this file however you like.
+// Modified threadpool.h with job_size field for SJF scheduling
 #ifndef THREADPOOL_H
 #define THREADPOOL_H
 #include <pthread.h>
@@ -10,6 +11,7 @@ typedef struct ThreadPool_job_t {
     thread_func_t func;             // function pointer
     void* arg;                      // arguments for that function
     struct ThreadPool_job_t* next;  // pointer to the next job in the queue
+    unsigned long job_size;         // size metric for SJF scheduling
     // add other members if needed
 } ThreadPool_job_t;
 
@@ -52,7 +54,7 @@ void ThreadPool_destroy(ThreadPool_t* tp);
 *     true  - On success
 *     false - Otherwise
 */
-bool ThreadPool_add_job(ThreadPool_t* tp, thread_func_t func, void* arg);
+bool ThreadPool_add_job(ThreadPool_t* tp, thread_func_t func, void* arg, unsigned long job_size);
 
 /**
 * Get a job from the job queue of the ThreadPool object
