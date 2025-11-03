@@ -338,7 +338,7 @@ make clean    # Remove artifacts
 
 ### Run
 ```bash
-./wordcount sample1.txt sample2.txt sample3.txt
+./wordcount testcase/sample*.txt
 ```
 
 ### Check Results
