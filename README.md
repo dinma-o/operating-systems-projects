@@ -220,7 +220,7 @@ Value_node {
 
 #### Test 1: Word Count Verification
 ```bash
-./wordcount sample*.txt
+./wordcount testcase/sample*.txt
 cat result-*.txt | awk -F: '{sum+=$2} END {print sum}'  # Should be 105000
 cat result-*.txt | wc -l                                # Should be 21
 cat result-*.txt | cut -d: -f1 | sort | uniq -d        # Should be empty
@@ -251,7 +251,7 @@ All configurations produced correct word counts with no data corruption.
 #### Valgrind Memory Check
 ```bash
 valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes \
-         ./wordcount sample1.txt sample2.txt sample3.txt
+         ./wordcount testcase/sample1.txt testcase/sample2.txt testcase/sample3.txt
 ```
 
 **Results:**
@@ -267,7 +267,7 @@ valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes \
 
 #### Helgrind Race Detection
 ```bash
-valgrind --tool=helgrind ./wordcount sample*.txt
+valgrind --tool=helgrind ./wordcount testcase/sample*.txt
 ```
 
 **Results:**
