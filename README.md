@@ -227,20 +227,20 @@ cat result-*.txt | cut -d: -f1 | sort | uniq -d        # Should be empty
 ```
 
 **Results:**
-- ✅ Total occurrences: 105,000
-- ✅ Unique words: 21
-- ✅ No duplicate keys across partitions
-- ✅ Each word appears exactly 5000 times
+-  Total occurrences: 105,000
+-  Unique words: 21
+-  No duplicate keys across partitions
+- Each word appears exactly 5000 times
 
 #### Test 2: Variable Configurations
 
 | Files | Partitions | Threads | Result |
 |-------|-----------|---------|--------|
-| 20 | 1 | 1 | ✅ Correct (sequential-like) |
-| 20 | 5 | 2 | ✅ Correct |
-| 20 | 10 | 5 | ✅ Correct (default) |
-| 20 | 20 | 10 | ✅ Correct |
-| 20 | 5 | 10 | ✅ Correct (more threads than partitions) |
+| 20 | 1 | 1 | Correct (sequential-like) |
+| 20 | 5 | 2 |  Correct |
+| 20 | 10 | 5 |  Correct (default) |
+| 20 | 20 | 10 |  Correct |
+| 20 | 5 | 10 |  Correct (more threads than partitions) |
 
 All configurations produced correct word counts with no data corruption.
 
@@ -263,7 +263,7 @@ valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes \
 ==12345== All heap blocks were freed -- no leaks are possible
 ```
 
-✅ **Zero memory leaks detected**
+ **Zero memory leaks detected**
 
 #### Helgrind Race Detection
 ```bash
@@ -275,7 +275,7 @@ valgrind --tool=helgrind ./wordcount testcase/sample*.txt
 ==12345== ERROR SUMMARY: 0 errors from 0 contexts
 ```
 
-✅ **No data races detected**
+ **No data races detected**
 
 ---
 
