@@ -1,0 +1,18 @@
+.       5
+..      5
+file1  10 KB
+file2   3 KB
+dir1    2
+.       3
+..      5
+file3   4 KB
+.       4
+..      4
+file1  10 KB
+dir1    3
+.       2
+..      2
+.       4
+..      4
+file1  10 KB
+dir1    3
