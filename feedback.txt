@@ -4,8 +4,9 @@ Marked by Han Yang <hyang20@ualberta.ca>
 Functionality = 10/10
 Correctness = 40/40
 Runtime = 10/10
-Memory leaks = 10/10
+Memory leaks = 0/10
+    - Found the memory leak by autograder.
 Makefile = 15/15
 Readme = 15/15
 ====
-Total = 100/100
+Total = 90/100
