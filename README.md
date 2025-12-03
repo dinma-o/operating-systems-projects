@@ -52,6 +52,22 @@ I tested the program using the provided `create_fs` utility and a combination of
     valgrind --leak-check=yes ./fs input_file
     ```
 
+    ### Testing Commands
+```bash
+# Compile
+make clean && make
+
+# Run single test
+./fs tests/test1/input > stdout.txt 2> stderr.txt
+diff stdout.txt tests/test1/stdout_expected
+diff stderr.txt tests/test1/stderr_expected
+
+# Run all tests
+python3 test.py
+
+# Memory leak check
+valgrind --leak-check=full --show-leak-kinds=all ./fs tests/test1/input
+```
 ## Sources
 
 * Assignment 3 Specification (a3_cmput379.pdf)
