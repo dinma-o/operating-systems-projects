@@ -1,20 +1,7 @@
 /**
- * fs-sim.c
- * 
- * CMPUT 379 - Assignment 3
- * UNIX File System Simulator - Main Implementation
- * 
- * This file implements a simulator for a UNIX-like file system with:
- * - 128 KB virtual disk (128 blocks of 1 KB each)
- * - Contiguous block allocation
- * - Hierarchical directories
- * - Consistency checking on mount
- * 
- * IMPLEMENTATION STRATEGY:
- * 1. Use helper functions for bit manipulation (DRY principle)
- * 2. Maintain global state for mounted filesystem
- * 3. Always check errors in specified order
- * 4. Write superblock back to disk after every mutation
+ * CMPUT 379 Assignment 3 - Filesystem Simulator    
+ * Name: Chidinma Obi-Okoye
+ * CCID: obiokoye
  */
 
 #define _GNU_SOURCE
@@ -28,61 +15,31 @@
 #include <ctype.h>
 #include "fs-sim.h"
 
-/* ========================================================================
- * GLOBAL STATE
- * ======================================================================== */
-
-/**
- * Global Variables:
- * - sb: In-memory copy of the superblock (always synced with disk)
- * - buffer: 1 KB buffer for read/write operations
- * - current_dir_inode: Index of current working directory
- *   (127 = root, 0-125 = regular directory inode)
- * - disk_fd: File descriptor for mounted virtual disk
- * - is_mounted: Flag indicating if a filesystem is currently mounted
- * - current_disk_name: Name of currently mounted disk file
- */
+//Global variables
 static Superblock sb;
 static uint8_t buffer[1024];
-static int current_dir_inode = 127;  // Start at root
+static int current_dir_inode = 127; 
 static int disk_fd = -1;
 static int is_mounted = 0;
 static char current_disk_name[256];
 
 /* ========================================================================
- * BIT MANIPULATION HELPERS
- * 
- * These functions abstract the packed bitfield operations for inode fields.
- * Note: Masks used to isolate bits.
+ * BIT MANIPULATION & INODE HELPERS
  * ======================================================================== */
 
 /**
- * is_inode_used()
- * 
  * Checks if an inode is marked as "in use".
- * 
- * @param inode: Pointer to inode structure
- * @return: 1 if used, 0 if free
- * 
- * IMPLEMENTATION:
- * - Check bit 7 of isused_size field
- * - Bit 7 = 1 means used, 0 means free
+ * It returns 1 if used, 0 if free. 
+ * Bit 7 of isused_size indicates usage. 
+ * Mask is used to isolate this bit.
  */
 static inline int is_inode_used(const Inode *inode) {
     return (inode->isused_size & 0x80) != 0;
 }
 
 /**
- * set_inode_used()
- * 
  * Sets or clears the "used" flag of an inode.
- * 
- * @param inode: Pointer to inode structure
- * @param used: 1 to mark used, 0 to mark free
- * 
- * IMPLEMENTATION:
- * - Preserve bits 0-6 (file size)
- * - Set or clear bit 7 (used flag)
+ * If used is 1, marks as used; if 0, marks as free.
  */
 static inline void set_inode_used(Inode *inode, int used) {
     if (used) {
@@ -93,59 +50,30 @@ static inline void set_inode_used(Inode *inode, int used) {
 }
 
 /**
- * get_file_size()
- * 
  * Extracts file size (in blocks) from inode.
- * 
- * @param inode: Pointer to inode structure
- * @return: File size in blocks (0-127)
- * 
- * IMPLEMENTATION:
- * - Extract bits 0-6 of isused_size
- * - Bit mask: 0x7F = 0b01111111
+ * Mask is used to get bits 0-6 of isused_size due to bit packing.
  */
 static inline int get_file_size(const Inode *inode) {
     return inode->isused_size & 0x7F;
 }
 
 /**
- * set_file_size()
- * 
  * Sets file size (in blocks) in inode.
- * 
- * @param inode: Pointer to inode structure
- * @param size: File size in blocks (0-127)
- * 
- * IMPLEMENTATION:
- * - Preserve bit 7 (used flag)
- * - Set bits 0-6 to size value
  */
 static inline void set_file_size(Inode *inode, int size) {
     inode->isused_size = (inode->isused_size & 0x80) | (size & 0x7F);
 }
 
 /**
- * is_directory()
- * 
- * Checks if an inode represents a directory.
- * 
- * @param inode: Pointer to inode structure
+ * Checks if an inode represents a directory by checking bit 7 of isdir_parent field.
  * @return: 1 if directory, 0 if file
- * 
- * IMPLEMENTATION:
- * - Check bit 7 of isdir_parent field
  */
 static inline int is_directory(const Inode *inode) {
     return (inode->isdir_parent & 0x80) != 0;
 }
 
 /**
- * set_is_directory()
- * 
  * Sets or clears the "directory" flag of an inode.
- * 
- * @param inode: Pointer to inode structure
- * @param is_dir: 1 for directory, 0 for file
  */
 static inline void set_is_directory(Inode *inode, int is_dir) {
     if (is_dir) {
@@ -156,27 +84,14 @@ static inline void set_is_directory(Inode *inode, int is_dir) {
 }
 
 /**
- * get_parent_index()
- * 
  * Gets parent inode index from inode.
- * 
- * @param inode: Pointer to inode structure
- * @return: Parent inode index (0-125 or 127 for root)
- * 
- * IMPLEMENTATION:
- * - Extract bits 0-6 of isdir_parent
  */
 static inline int get_parent_index(const Inode *inode) {
     return inode->isdir_parent & 0x7F;
 }
 
 /**
- * set_parent_index()
- * 
  * Sets parent inode index in inode.
- * 
- * @param inode: Pointer to inode structure
- * @param parent: Parent inode index (0-125 or 127)
  */
 static inline void set_parent_index(Inode *inode, int parent) {
     inode->isdir_parent = (inode->isdir_parent & 0x80) | (parent & 0x7F);
@@ -184,50 +99,24 @@ static inline void set_parent_index(Inode *inode, int parent) {
 
 /* ========================================================================
  * FREE BLOCK LIST HELPERS
- * 
  * These functions manage the free-space bitmap in the superblock.
- * 
- * BIT ORDERING:
- * - Byte 0, bit 0 = block 0
- * - Byte 0, bit 7 = block 7
- * - Byte 1, bit 0 = block 8
- * - etc.
  * ======================================================================== */
 
 /**
- * is_block_free()
- * 
  * Checks if a block is marked free in the free-space list.
- * 
- * @param block_num: Block index (0-127)
- * @return: 1 if free (bit=0), 0 if used (bit=1)
- * 
- * IMPLEMENTATION:
- * - Locate byte: block_num / 8
- * - Locate bit within byte: block_num % 8
- * - Check if bit is 0 (free) or 1 (used)
  */
 static int is_block_free(int block_num) {
-    int byte_idx = block_num / 8;
-    int bit_idx = 7 - (block_num % 8);
-    return (sb.free_block_list[byte_idx] & (1 << bit_idx)) == 0;
+    int byte_idx = block_num / 8; //Finds byte index
+    int bit_idx = 7 - (block_num % 8); //Finds bit index within byte (7 is MSB)
+    return (sb.free_block_list[byte_idx] & (1 << bit_idx)) == 0; //Returns 1 if free (bit=0), 0 if used (bit=1)
 }
 
 /**
- * set_block_free()
- * 
  * Marks a block as free or used in the free-space list.
- * 
- * @param block_num: Block index (0-127)
- * @param free: 1 to mark free, 0 to mark used
- * 
- * IMPLEMENTATION:
- * - 0 in bitmap = free
- * - 1 in bitmap = used
  */
 static void set_block_free(int block_num, int free) {
-    int byte_idx = block_num / 8;
-    int bit_idx = 7 - (block_num % 8);
+    int byte_idx = block_num / 8; //Finds byte index
+    int bit_idx = 7 - (block_num % 8); //Finds bit index within byte (7 is MSB)
     
     if (free) {
         sb.free_block_list[byte_idx] &= ~(1 << bit_idx);   // Clear bit (free)   
@@ -237,13 +126,10 @@ static void set_block_free(int block_num, int free) {
 }
 
 /**
- * mark_blocks_used()
- * 
  * Marks a contiguous range of blocks as used or free.
- * 
- * @param start: Starting block index
- * @param count: Number of blocks
- * @param used: 1 to mark used, 0 to mark free
+ * start: Starting block index
+ * count: Number of blocks
+ * used: 1 to mark used, 0 to mark free
  */
 static void mark_blocks_used(int start, int count, int used) {
     for (int i = 0; i < count; i++) {
@@ -252,25 +138,15 @@ static void mark_blocks_used(int start, int count, int used) {
 }
 
 /**
- * find_contiguous_blocks()
- * 
  * Finds the first contiguous sequence of free blocks.
- * 
- * @param size: Number of contiguous blocks needed
- * @return: Starting block index (1-127), or -1 if not found
- * 
- * ALGORITHM:
- * - Scan from block 1 to 127 (skip superblock at 0)
- * - For each starting position, check if next 'size' blocks are free
- * - Return first valid starting position
- * 
- * TIME COMPLEXITY: O(n * size) worst case, where n = 127
+ * size: Number of contiguous blocks needed
+ * return: Starting block index, or -1 if not found
  */
 static int find_contiguous_blocks(int size) {
     // Edge case: requesting 0 blocks
-    if (size == 0) return -1;
-    
-    // Scan for first contiguous run
+    if (size == 0) return -1; // Invalid request
+
+    // Scan for first contiguous run, skipping block 0 (superblock)
     for (int start = 1; start <= 128 - size; start++) {
         int all_free = 1;
         for (int i = 0; i < size; i++) {
@@ -289,20 +165,11 @@ static int find_contiguous_blocks(int size) {
 
 /* ========================================================================
  * INODE NAME HELPERS
- * 
- * NOTE: File names can be exactly 5 characters with NO null terminator
- * Example: "image" is stored as ['i','m','a','g','e'] with no '\0'
+ * File names can be exactly 5 characters with NO null terminator
  * ======================================================================== */
 
 /**
- * get_inode_name()
- * 
  * Safely extracts name from inode into null-terminated buffer.
- * 
- * @param inode: Pointer to inode structure
- * @param dest: Destination buffer (must be at least 6 bytes)
- * 
- * IMPLEMENTATION:
  * - Copy up to 5 characters
  * - Always null-terminate at position 5
  */
@@ -312,64 +179,40 @@ static void get_inode_name(const Inode *inode, char *dest) {
 }
 
 /**
- * set_inode_name()
- * 
- * Stores name into inode (handles both short and 5-char names).
- * 
- * @param inode: Pointer to inode structure
- * @param name: Null-terminated source name
- * 
- * IMPLEMENTATION:
- * - Zero the field first
- * - Copy up to 5 characters
- * - If name is < 5 chars, remaining bytes stay zero
+ * Stores name into inode (handles 5 maximum)
  */
 static void set_inode_name(Inode *inode, const char *name) {
-    memset(inode->name, 0, 5);
+    memset(inode->name, 0, 5); //sets first 5 bytes to 0
     int len = strlen(name);
-    if (len > 5) len = 5;
-    memcpy(inode->name, name, len);
+    if (len > 5) len = 5; // Limit to 5 characters
+    memcpy(inode->name, name, len); // Copy name into inode
 }
 
 /**
- * inode_name_equals()
- * 
  * Case-insensitive comparison of inode name with target string.
- * 
- * @param inode: Pointer to inode structure
- * @param name: Target name (null-terminated)
- * @return: 1 if names match (case-insensitive), 0 otherwise
  */
 static int inode_name_equals(const Inode *inode, const char *name) {
-    char inode_name[6];
+    char inode_name[6]; // Include space for null terminator
     get_inode_name(inode, inode_name);
-    return strcasecmp(inode_name, name) == 0;
+    return strcasecmp(inode_name, name) == 0; // Returns 1 if equal, 0 otherwise
 }
 
 /* ========================================================================
  * DISK I/O HELPERS
  * ======================================================================== */
 
-
 /**
- * save_superblock()
- * 
- * Writes in-memory superblock back to disk.
- * 
- * NOTE: Must be called after ANY modification to filesystem
+ * Writes in-memory superblock back to disk
+ * Called after any modification to filesystem metadata
  */
 static void save_superblock(void) {
-    lseek(disk_fd, 0, SEEK_SET);
-    write(disk_fd, &sb, sizeof(Superblock));
+    lseek(disk_fd, 0, SEEK_SET); // Move to start of disk
+    write(disk_fd, &sb, sizeof(Superblock)); // Write superblock
 }
 
 /**
- * read_block()
- * 
- * Reads a data block from disk into buffer.
- * 
- * @param block_num: Block index (0-127)
- * @param data: Destination buffer (must be 1024 bytes)
+ * Reads a data block from disk into buffer. 
+ * Must be 1024 bytes
  */
 static void read_block(int block_num, uint8_t *data) {
     lseek(disk_fd, block_num * 1024, SEEK_SET);
@@ -377,29 +220,19 @@ static void read_block(int block_num, uint8_t *data) {
 }
 
 /**
- * write_block()
- * 
- * Writes a data block from buffer to disk.
- * 
- * @param block_num: Block index (0-127)
- * @param data: Source buffer (must be 1024 bytes)
+ * Writes a data block from buffer to disk
  */
 static void write_block(int block_num, const uint8_t *data) {
     lseek(disk_fd, block_num * 1024, SEEK_SET);
     write(disk_fd, data, 1024);
 }
 
-
 /* ========================================================================
  * INODE SEARCH HELPERS
  * ======================================================================== */
 
 /**
- * find_free_inode()
- * 
  * Finds first unused inode in superblock.
- * 
- * @return: Inode index (0-125), or -1 if all used
  */
 static int find_free_inode(void) {
     for (int i = 0; i < 126; i++) {
@@ -411,19 +244,13 @@ static int find_free_inode(void) {
 }
 
 /**
- * find_inode_by_name()
- * 
  * Searches for file/directory by name in a specific directory.
- * 
- * @param name: Target name (case-insensitive)
- * @param parent_inode: Parent directory index (0-125 or 127 for root)
- * @return: Inode index if found, -1 otherwise
  */
 static int find_inode_by_name(const char *name, int parent_inode) {
     for (int i = 0; i < 126; i++) {
         if (is_inode_used(&sb.inode[i]) &&
-            get_parent_index(&sb.inode[i]) == parent_inode &&
-            inode_name_equals(&sb.inode[i], name)) {
+            get_parent_index(&sb.inode[i]) == parent_inode && // Check parent
+            inode_name_equals(&sb.inode[i], name)) { // Check name
             return i;
         }
     }
@@ -431,14 +258,8 @@ static int find_inode_by_name(const char *name, int parent_inode) {
 }
 
 /**
- * count_children()
- * 
  * Counts number of files/directories in a directory.
- * 
- * @param dir_inode: Directory inode index (0-125 or 127)
- * @return: Count of children (excludes . and ..)
- * 
- * NOTE: This count is used for fs_ls output
+ *  This count is used for fs_ls output
  */
 static int count_children(int dir_inode) {
     int count = 0;
@@ -448,26 +269,17 @@ static int count_children(int dir_inode) {
             count++;
         }
     }
-    // Add 2 for . and .. (always present in directory listing)
+    // Add 2 for . and ..
     return count + 2;
 }
 
 /* ========================================================================
  * CONSISTENCY CHECKING
- * 
- * NOTE: These checks MUST be performed in exact order (1-6).
- * Return the FIRST error code detected, not all errors.
+ * Returns the first error code detected ONLY
  * ======================================================================== */
 
 /**
- * is_block_free_from_sb()
- * 
- * Helper to check block status from a specific superblock
- * (used during consistency checking before mounting)
- * 
- * @param temp_sb: Pointer to superblock being checked
- * @param block_num: Block index (0-127)
- * @return: 1 if free, 0 if used
+ * Helper to check block status from a specific unmounted superblock
  */
 static int is_block_free_from_sb(const Superblock *temp_sb, int block_num) {
     int byte_idx = block_num / 8;
@@ -476,12 +288,8 @@ static int is_block_free_from_sb(const Superblock *temp_sb, int block_num) {
 }
 
 /**
- * check_consistency()
- * 
  * Performs 6 consistency checks on a superblock.
- * 
- * @param temp_sb: Pointer to superblock to validate
- * @return: Error code (1-6), or 0 if consistent
+ * Returns 0 if all checks pass, or error code (1-6) of first failure.
  * 
  * CHECK ORDER :
  * 1. Free inodes must be all-zero; used inodes must have nonzero name
@@ -494,9 +302,7 @@ static int is_block_free_from_sb(const Superblock *temp_sb, int block_num) {
 static int check_consistency(const Superblock *temp_sb) {
     /* ====================================================================
      * CHECK 1: Free inode validation
-     * 
-     * RULE:
-     * - If inode is free (bit 7 of isused_size = 0), ALL 8 bytes must be 0
+     * - If inode is free (bit 7 of isused_size = 0), all 8 bytes must be 0
      * - If inode is used (bit 7 of isused_size = 1), name[0] must be nonzero
      * ==================================================================== */
     for (int i = 0; i < 126; i++) {
@@ -507,53 +313,46 @@ static int check_consistency(const Superblock *temp_sb) {
             const uint8_t *bytes = (const uint8_t*)&temp_sb->inode[i];
             for (int j = 0; j < 8; j++) {
                 if (bytes[j] != 0) {
-                    return 1;  // ERROR: Free inode has non-zero data
+                    return 1;  // Free inode has non-zero data
                 }
             }
         } else {
             // Used inode: name must start with nonzero byte
             if (temp_sb->inode[i].name[0] == 0) {
-                return 1;  // ERROR: Used inode has zero name
+                return 1;  // Used inode has zero name
             }
         }
     }
     
     /* ====================================================================
      * CHECK 2: File block range validation
-     * 
-     * RULE:
-     * - For files (not directories), start_block must be in [1, 127]
+     * - For files, start_block must be in [1, 127]
      * - Last block (start_block + size - 1) must also be in [1, 127]
-     * 
-     * EXAMPLE:
-     * - start_block = 125, size = 5: last block = 129 (INVALID)
      * ==================================================================== */
     for (int i = 0; i < 126; i++) {
         int used = (temp_sb->inode[i].isused_size & 0x80) != 0;
         int is_dir = (temp_sb->inode[i].isdir_parent & 0x80) != 0;
         
-        if (used && !is_dir) {  // File (not directory)
+        if (used && !is_dir) {  // File 
             int start = temp_sb->inode[i].start_block;
             int size = temp_sb->inode[i].isused_size & 0x7F;
             
             // Check start block in valid range
             if (start < 1 || start > 127) {
-                return 2;  // ERROR: start_block out of range
+                return 2;  // start_block out of range
             }
             
             // Check last block in valid range
             if (start + size - 1 > 127) {
-                return 2;  // ERROR: file extends beyond disk
+                return 2;  // file extends beyond disk
             }
         }
     }
     
     /* ====================================================================
-     * CHECK 3: Directory validation
-     * 
-     * RULE:
+     * CHECK 3: Directory metadata validation
      * - Directories must have size = 0 and start_block = 0
-     * - They don't occupy data blocks (only metadata in inode)
+     * - They don't occupy data blocks 
      * ==================================================================== */
     for (int i = 0; i < 126; i++) {
         int used = (temp_sb->inode[i].isused_size & 0x80) != 0;
@@ -564,15 +363,13 @@ static int check_consistency(const Superblock *temp_sb) {
             int start = temp_sb->inode[i].start_block;
             
             if (size != 0 || start != 0) {
-                return 3;  // ERROR: directory has non-zero size/start
+                return 3;  // directory has non-zero size/start
             }
         }
     }
     
     /* ====================================================================
      * CHECK 4: Parent index validation
-     * 
-     * RULES:
      * - Parent index cannot equal own index (no self-parenting)
      * - Parent index cannot be 126 (reserved value)
      * - If parent is 0-125, parent inode must be used and be a directory
@@ -586,12 +383,12 @@ static int check_consistency(const Superblock *temp_sb) {
             
             // Check: can't be own parent
             if (parent == i) {
-                return 4;  // ERROR: self-parenting
+                return 4;  // self-parenting
             }
             
             // Check: 126 is reserved
             if (parent == 126) {
-                return 4;  // ERROR: invalid parent value
+                return 4;  // invalid parent value
             }
             
             // If parent is regular inode (not root 127)
@@ -601,7 +398,7 @@ static int check_consistency(const Superblock *temp_sb) {
                 
                 // Parent must exist and be a directory
                 if (!parent_used || !parent_is_dir) {
-                    return 4;  // ERROR: invalid parent
+                    return 4;  // invalid parent
                 }
             }
         }
@@ -609,13 +406,11 @@ static int check_consistency(const Superblock *temp_sb) {
     
     /* ====================================================================
      * CHECK 5: Name uniqueness within directories
-     * 
-     * RULE:
+     *
      * - Within each directory, all file/directory names must be unique
      * - Case-insensitive comparison (strcasecmp)
      * - Names can be duplicated across DIFFERENT directories
      * 
-     * ALGORITHM:
      * - For each directory (including root = 127)
      * - Compare all pairs of children in that directory
      * ==================================================================== */
@@ -646,7 +441,7 @@ static int check_consistency(const Superblock *temp_sb) {
             name_j[5] = '\0';
             
             if (strcasecmp(name_i, name_j) == 0) {
-                return 5;  // ERROR: duplicate name in directory
+                return 5;  // duplicate name in directory
             }
         }
     }
@@ -682,7 +477,7 @@ static int check_consistency(const Superblock *temp_sb) {
                 name_j[5] = '\0';
                 
                 if (strcasecmp(name_i, name_j) == 0) {
-                    return 5;  // ERROR: duplicate name
+                    return 5;  // duplicate name
                 }
             }
         }
@@ -690,12 +485,10 @@ static int check_consistency(const Superblock *temp_sb) {
     
     /* ====================================================================
      * CHECK 6: Block allocation consistency
-     * 
-     * RULE:
+     *
      * - Blocks marked FREE (bit=0) must not be allocated to any file
      * - Blocks marked USED (bit=1) must be allocated to EXACTLY one file
      * 
-     * ALGORITHM:
      * - Count allocations per block across all files
      * - Compare with free-space list
      * ==================================================================== */
@@ -723,71 +516,55 @@ static int check_consistency(const Superblock *temp_sb) {
         int is_free = is_block_free_from_sb(temp_sb, b);
         
         if (is_free && block_count[b] > 0) {
-            return 6;  // ERROR: free block is allocated
+            return 6;  //free block is allocated
         }
         
         if (!is_free && block_count[b] != 1) {
-            return 6;  // ERROR: used block not allocated exactly once
+            return 6;  //used block not allocated exactly once
         }
     }
     
-    return 0;  // All checks passed!
+    return 0;  // All checks passed successfully yayyyyyy woohoo
 }
 
 /* ========================================================================
- * CORE FILESYSTEM OPERATIONS
+ * MAIN FILESYSTEM OPERATIONS
  * ======================================================================== */
 
 /**
- * fs_mount()
- * 
  * Mounts a virtual disk and validates its filesystem.
- * 
- * @param name: Name of disk file
- * 
- * STEPS:
- * 1. Check if disk file exists
- * 2. Read superblock
- * 3. Run consistency checks (in order 1-6)
- * 4. If consistent, mount and set CWD to root
- * 5. If inconsistent, don't mount and keep previous filesystem
- * 
- * ERRORS:
- * - "Cannot find disk <name>" if file doesn't exist
- * - "File system in <name> is inconsistent (error code: X)" if checks fail
- * 
- * NOTE: Buffer is NOT zeroed on mount
+ *  Buffer is NOT zeroed on mount
  */
 void fs_mount(char *name) {
-    /* Step 1: Check if disk file exists */
+    /* Check if disk file exists */
     int fd = open(name, O_RDWR);
     if (fd < 0) {
-        fprintf(stderr, "Error: Cannot find disk %s\n", name);
+        fprintf(stderr, "Error: Cannot find disk %s\n", name); //File doesn't exist
         return;
     }
     
-    /* Step 2: Read superblock from disk */
+    /* Read superblock from disk */
     Superblock temp_sb;
     ssize_t bytes_read = read(fd, &temp_sb, sizeof(Superblock));
     
     if (bytes_read != sizeof(Superblock)) {
-        fprintf(stderr, "Error: Cannot find disk %s\n", name);
+        fprintf(stderr, "Error: Cannot find disk %s\n", name); //Failed to read superblock
         close(fd);
         return;
     }
     
-    /* Step 3: Run consistency checks */
+    /* Run consistency checks */
     int error_code = check_consistency(&temp_sb);
     
     if (error_code > 0) {
         /* Filesystem is inconsistent - don't mount */
-        fprintf(stderr, "Error: File system in %s is inconsistent (error code: %d)\n",
+        fprintf(stderr, "Error: File system in %s is inconsistent (error code: %d)\n", //Checks failed (nooo)
                 name, error_code);
         close(fd);
         return;
     }
     
-    /* Step 4: Consistency check passed - mount the filesystem */
+    /* Success - mount the filesystem */
     
     // Close previous disk if one was mounted
     if (is_mounted && disk_fd >= 0) {
@@ -801,31 +578,10 @@ void fs_mount(char *name) {
     disk_fd = fd;
     is_mounted = 1;
     current_dir_inode = 127;  // Set CWD to root
-    
-    // NOTE: Do NOT zero the buffer on mount (per spec)
 }
 
 /**
- * fs_create()
- * 
  * Creates a new file or directory.
- * 
- * @param name: Name of file/directory (up to 5 chars)
- * @param size: Size in blocks (0 for directory, 1-127 for file)
- * 
- * STEPS:
- * 1. Check if filesystem is mounted
- * 2. Find free inode
- * 3. Check name uniqueness (including . and ..)
- * 4. Find contiguous blocks (if file)
- * 5. Create inode and allocate blocks
- * 6. Zero data blocks
- * 7. Write superblock back to disk
- * 
- * ERROR CHECKING ORDER :
- * 1. Check free inode available
- * 2. Check name uniqueness
- * 3. Check contiguous blocks available
  */
 void fs_create(char name[5], int size) {
     /* Check if filesystem is mounted */
@@ -834,7 +590,7 @@ void fs_create(char name[5], int size) {
         return;
     }
     
-    /* ERROR CHECK 1: Free inode available */
+    /*  Check if Free inode available */
     int inode_idx = find_free_inode();
     if (inode_idx < 0) {
         fprintf(stderr, "Error: Superblock in disk %s is full, cannot create %s\n",
@@ -842,7 +598,7 @@ void fs_create(char name[5], int size) {
         return;
     }
     
-    /* ERROR CHECK 2: Name uniqueness */
+    /* Name uniqueness Check */
     
     // Check for reserved names . and ..
     if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) {
@@ -856,7 +612,7 @@ void fs_create(char name[5], int size) {
         return;
     }
     
-    /* ERROR CHECK 3: Contiguous blocks available (if file) */
+    /* Contiguous blocks available (for files only) */
     int start_block = 0;
     if (size > 0) {  // File (not directory)
         start_block = find_contiguous_blocks(size);
@@ -867,7 +623,7 @@ void fs_create(char name[5], int size) {
         }
     }
     
-    /* All checks passed - create the inode */
+    /* create the inode */
     Inode *inode = &sb.inode[inode_idx];
     memset(inode, 0, sizeof(Inode));
     
@@ -901,13 +657,7 @@ void fs_create(char name[5], int size) {
 }
 
 /**
- * recursive_delete()
- * 
  * Helper function to recursively delete an inode and its children.
- * 
- * @param inode_idx: Index of inode to delete
- * 
- * ALGORITHM:
  * - If directory: recursively delete all children first
  * - If file: zero and free data blocks
  * - Zero the inode itself
@@ -944,17 +694,7 @@ static void recursive_delete(int inode_idx) {
 }
 
 /**
- * fs_delete()
- * 
  * Deletes a file or directory (and all its contents).
- * 
- * @param name: Name of file/directory to delete
- * 
- * STEPS:
- * 1. Check if filesystem mounted
- * 2. Find inode by name in current directory
- * 3. Recursively delete
- * 4. Write superblock back
  */
 void fs_delete(char name[5]) {
     if (!is_mounted) {
@@ -977,26 +717,11 @@ void fs_delete(char name[5]) {
 }
 
 /**
- * fs_read()
- * 
- * Reads a block from a file into the buffer.
- * 
- * @param name: Name of file to read from
- * @param block_num: Block number within file (0-indexed)
- * 
- * STEPS:
- * 1. Check if filesystem mounted
- * 2. Find file by name (must be a file, not directory)
- * 3. Validate block_num is in range [0, size-1]
- * 4. Read block from disk into global buffer
- * 
- * ERROR CHECKING ORDER:
- * 1. File existence (and not a directory)
- * 2. Block number in valid range
+ * Reads a block from a file into the buffer. * 
  */
 void fs_read(char name[5], int block_num) {
-    if (!is_mounted) {
-        fprintf(stderr, "Error: No file system is mounted\n");
+    if (!is_mounted) { //Check if filesystem is mounted
+        fprintf(stderr, "Error: No file system is mounted\n"); 
         return;
     }
     
@@ -1009,7 +734,7 @@ void fs_read(char name[5], int block_num) {
         return;
     }
     
-    /* Validate block number */
+    /* Validate block number is in range [0, size-1] */
     int size = get_file_size(&sb.inode[inode_idx]);
     
     if (block_num < 0 || block_num >= size) {
@@ -1017,7 +742,7 @@ void fs_read(char name[5], int block_num) {
         return;
     }
     
-    /* Read the block into buffer */
+    /* Read the block into global buffer */
     int start_block = sb.inode[inode_idx].start_block;
     int actual_block = start_block + block_num;
     
@@ -1025,20 +750,8 @@ void fs_read(char name[5], int block_num) {
 }
 
 /**
- * fs_write()
- * 
  * Writes the buffer to a block in a file.
- * 
- * @param name: Name of file to write to
- * @param block_num: Block number within file (0-indexed)
- * 
- * STEPS:
- * 1. Check if filesystem mounted
- * 2. Find file by name (must be a file, not directory)
- * 3. Validate block_num is in range [0, size-1]
- * 4. Write buffer to disk block
- * 
- * NOTE: Superblock doesn't need updating (no metadata changes)
+ * Superblock doesn't need updating (no metadata changes)
  */
 void fs_write(char name[5], int block_num) {
     if (!is_mounted) {
@@ -1071,18 +784,9 @@ void fs_write(char name[5], int block_num) {
 }
 
 /**
- * fs_buff()
- * 
  * Updates the buffer with new data.
- * 
- * @param buff: New buffer contents (up to 1024 bytes)
- * 
- * IMPLEMENTATION:
- * - Zero entire buffer first
- * - Copy new data into buffer
  * - Remaining bytes stay zero if buff < 1024 bytes
- * 
- * NOTE: No error checking required per spec
+ * -  No error checking required per spec
  */
 void fs_buff(uint8_t buff[1024]) {
 
@@ -1095,28 +799,13 @@ void fs_buff(uint8_t buff[1024]) {
     // Zero the buffer first
     memset(buffer, 0, 1024);
     
-    // Copy new data (caller ensures buff is valid)
+    // Copy new data
     memcpy(buffer, buff, 1024);
 }
 
 /**
- * fs_ls()
- * 
  * Lists all files and directories in current working directory.
- * 
- * OUTPUT FORMAT:
- * - First line: "."  <count>
- * - Second line: ".." <count>
- * - Remaining lines: entries sorted by inode index
- * 
- * For files:   printf("%-5s %3d KB\n", name, size);
- * For dirs:    printf("%-5s %3d\n", name, num_children);
- * 
- * SPECIAL CASES:
- * - If CWD is root (127), then . and .. both show same count
  * - Directory count includes . and .. (add 2 to actual children)
- * 
- * NOTE: No error checking required per spec
  */
 void fs_ls(void) {
     // Check: Filesystem must be mounted
@@ -1164,18 +853,10 @@ void fs_ls(void) {
 }
 
 /**
- * fs_cd()
- * 
  * Changes current working directory.
- * 
- * @param name: Name of directory to change to (can be ., .., or subdir)
- * 
- * RULES:
  * - "." stays in current directory
  * - ".." moves to parent (unless already at root)
  * - Other names must be subdirectories in current directory
- * 
- * SPECIAL CASE:
  * - If at root and user does "cd ..", stay at root (don't error)
  */
 void fs_cd(char name[5]) {
@@ -1216,36 +897,18 @@ void fs_cd(char name[5]) {
 }
 
 /**
- * fs_defrag()
- * 
  * Defragments the disk by moving all used blocks to be contiguous.
- * 
- * ALGORITHM:
- * 1. Build sorted list of files by start_block
- * 2. Move each file to earliest available position
- * 3. Zero old block locations
- * 4. Update inodes with new start_block values
- * 5. Rebuild free-space list
- * 
- * RESULT:
  * - All used blocks are packed at beginning (after superblock)
  * - All free blocks are at end
  * - File data is preserved
- * 
- * TIME COMPLEXITY: O(n log n + total_blocks) where n = number of files
- * 
- * NOTE: No error checking required per spec
  */
 void fs_defrag(void) {
     if (!is_mounted) {
         fprintf(stderr, "Error: No file system is mounted\n");
         return;
     }
-    
-    /* ====================================================================
-     * STEP 1: Build list of files sorted by start_block
-     * ==================================================================== */
-    
+
+    //Structure to hold file info for sorting
     typedef struct {
         int inode_idx;
         int start_block;
@@ -1255,7 +918,7 @@ void fs_defrag(void) {
     FileInfo files[126];
     int file_count = 0;
     
-    // Collect all files (not directories)
+    // Collect all files 
     for (int i = 0; i < 126; i++) {
         if (is_inode_used(&sb.inode[i]) && !is_directory(&sb.inode[i])) {
             files[file_count].inode_idx = i;
@@ -1265,7 +928,7 @@ void fs_defrag(void) {
         }
     }
     
-    // Sort files by start_block (simple bubble sort - sufficient for n=126)
+    // Sort files by start_block (simple bubble sort)
     for (int i = 0; i < file_count - 1; i++) {
         for (int j = i + 1; j < file_count; j++) {
             if (files[j].start_block < files[i].start_block) {
@@ -1276,16 +939,7 @@ void fs_defrag(void) {
         }
     }
     
-    /* ====================================================================
-     * STEP 2: Move files to compact positions
-     * 
-     * STRATEGY:
-     * - next_free tracks the next available block position
-     * - For each file in sorted order:
-     *   - If file is not already at next_free, move it
-     *   - Update next_free += file_size
-     * ==================================================================== */
-    
+    // Compact files to start of disk
     uint8_t temp_buf[1024];
     int next_free = 1;  // Start at block 1 (block 0 is superblock)
     
@@ -1303,12 +957,6 @@ void fs_defrag(void) {
                 write_block(next_free + b, temp_buf);
             }
             
-            // // Zero out old blocks
-            // memset(temp_buf, 0, 1024);
-            // for (int b = 0; b < size; b++) {
-            //     write_block(old_start + b, temp_buf);
-            // }
-            
             // Update inode with new start_block
             sb.inode[inode_idx].start_block = next_free;
         }
@@ -1317,15 +965,6 @@ void fs_defrag(void) {
         next_free += size;
     }
     
-    /* ====================================================================
-     * STEP 3: Rebuild free-space list
-     * 
-     * STRATEGY:
-     * - Clear entire free-space list (all free)
-     * - Mark block 0 as used (superblock)
-     * - Mark all file blocks as used based on new positions
-     * ==================================================================== */
-
      // Clear remaining blocks on disk
      memset(temp_buf, 0, 1024);
     for (int b = next_free; b < 128; b++) {
@@ -1351,13 +990,7 @@ void fs_defrag(void) {
     save_superblock();
 }
 
-/* ========================================================================
- * COMMAND PARSING AND MAIN
- * ======================================================================== */
-
 /**
- * parse_and_execute_command()
- * 
  * Parses a single line and executes the corresponding command.
  * 
  * @param line: Input line from command file
@@ -1376,7 +1009,7 @@ void fs_defrag(void) {
  * O                              - Defragment
  * Y <directory_name>             - Change directory
  * 
- * ERROR DETECTION:
+ * ERRORS
  * - Invalid command letter
  * - Wrong number of arguments
  * - Invalid argument format
@@ -1413,7 +1046,6 @@ static int parse_and_execute_command(char *line, int line_num, const char *input
     
     switch (cmd) {
         case 'M': {
-            // M <disk_name> (Check for exactly 1 arg)
             if (sscanf(args, "%s %s", arg1, extra) != 1) {
                 fprintf(stderr, "Command Error: %s, %d\n", input_file, line_num);
                 return 0;
@@ -1422,7 +1054,6 @@ static int parse_and_execute_command(char *line, int line_num, const char *input
             break;
         }
         case 'C': {
-            // C <file_name> <size> (Check for exactly 2 args)
             if (sscanf(args, "%s %d %s", arg1, &num_arg, extra) != 2) {
                 fprintf(stderr, "Command Error: %s, %d\n", input_file, line_num);
                 return 0;
@@ -1436,7 +1067,6 @@ static int parse_and_execute_command(char *line, int line_num, const char *input
             break;
         }
         case 'D': {
-            // D <file_name> (Check for exactly 1 arg)
             if (sscanf(args, "%s %s", arg1, extra) != 1) {
                 fprintf(stderr, "Command Error: %s, %d\n", input_file, line_num);
                 return 0;
@@ -1449,7 +1079,6 @@ static int parse_and_execute_command(char *line, int line_num, const char *input
             break;
         }
         case 'R': {
-            // R <file_name> <block_num> (Check for exactly 2 args)
             if (sscanf(args, "%s %d %s", arg1, &num_arg, extra) != 2) {
                 fprintf(stderr, "Command Error: %s, %d\n", input_file, line_num);
                 return 0;
@@ -1462,7 +1091,6 @@ static int parse_and_execute_command(char *line, int line_num, const char *input
             break;
         }
         case 'W': {
-            // W <file_name> <block_num> (Check for exactly 2 args)
             if (sscanf(args, "%s %d %s", arg1, &num_arg, extra) != 2) {
                 fprintf(stderr, "Command Error: %s, %d\n", input_file, line_num);
                 return 0;
@@ -1475,8 +1103,6 @@ static int parse_and_execute_command(char *line, int line_num, const char *input
             break;
         }
         case 'B': {
-            // B <characters>
-            // Check if args is empty
             if (*args == '\0') {
                 fprintf(stderr, "Command Error: %s, %d\n", input_file, line_num);
                 return 0;
@@ -1492,7 +1118,6 @@ static int parse_and_execute_command(char *line, int line_num, const char *input
             break;
         }
         case 'L': {
-            // L (No args)
             if (*args != '\0') {
                 fprintf(stderr, "Command Error: %s, %d\n", input_file, line_num);
                 return 0;
@@ -1501,7 +1126,6 @@ static int parse_and_execute_command(char *line, int line_num, const char *input
             break;
         }
         case 'O': {
-            // O (No args)
             if (*args != '\0') {
                 fprintf(stderr, "Command Error: %s, %d\n", input_file, line_num);
                 return 0;
@@ -1510,7 +1134,6 @@ static int parse_and_execute_command(char *line, int line_num, const char *input
             break;
         }
         case 'Y': {
-            // Y <directory_name> (Exactly 1 arg)
             if (sscanf(args, "%s %s", arg1, extra) != 1) {
                 fprintf(stderr, "Command Error: %s, %d\n", input_file, line_num);
                 return 0;
@@ -1529,20 +1152,6 @@ static int parse_and_execute_command(char *line, int line_num, const char *input
     return 1;
 }
 
-/**
- * main()
- * 
- * Entry point for filesystem simulator.
- * 
- * USAGE: ./fs <input_file>
- * 
- * STEPS:
- * 1. Validate command-line arguments
- * 2. Open input file
- * 3. Initialize buffer to zero
- * 4. Read and execute commands line by line
- * 5. Close input file and mounted disk
- */
 int main(int argc, char *argv[]) {
     /* Validate command-line arguments */
     if (argc != 2) {
