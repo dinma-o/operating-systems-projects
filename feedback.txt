@@ -1,0 +1,12 @@
+Marked by Steven Oufan Hai <oufan@ualberta.ca>
+
+Basic functionality = 10.0/10
+Mounting file system = 20/20
+Basic operations on files/directories = 40/40
+Defragmentation = 15.0/15
+Makefile = 10/10
+Readme = 5/5
+
+Memory leak deductions = 0
+====
+Total = 100/100

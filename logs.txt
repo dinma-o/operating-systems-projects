@@ -1,0 +1,123 @@
+======================================================
+==== Runnning make ===
+======================================================
+Built `fs` successfully
+
+======================================================
+==== Basic operations on files/directories ===
+======================================================
+>>>> basic-commands/test1 <<<<
+✅ disk1: Matches expected disk
+✅ STDOUT is correct
+✅ STDERR is correct
+  ===> +5 marks
+>>>> basic-commands/test2 <<<<
+✅ disk1: Matches expected disk
+✅ STDOUT is correct
+✅ STDERR is correct
+  ===> +5 marks
+>>>> basic-commands/test3 <<<<
+✅ disk1: Matches expected disk
+✅ STDOUT is correct
+✅ STDERR is correct
+  ===> +5 marks
+>>>> basic-commands/test4 <<<<
+✅ disk1: Matches expected disk
+✅ STDOUT is correct
+✅ STDERR is correct
+  ===> +5 marks
+>>>> basic-commands/test5 <<<<
+✅ disk1: Matches expected disk
+✅ STDOUT is correct
+✅ STDERR is correct
+  ===> +5 marks
+>>>> basic-commands/test6 <<<<
+✅ disk1: Matches expected disk
+✅ STDOUT is correct
+✅ STDERR is correct
+  ===> +5 marks
+>>>> basic-commands/test7 <<<<
+✅ disk1: Matches expected disk
+✅ STDOUT is correct
+✅ STDERR is correct
+  ===> +5 marks
+>>>> basic-commands/test8 <<<<
+✅ disk1: Matches expected disk
+✅ STDOUT is correct
+✅ STDERR is correct
+  ===> +5 marks
+======================================================
+==== Defragmentation ===
+======================================================
+>>>> defrag/test1 <<<<
+✅ disk1: Matches expected disk
+✅ STDOUT is correct
+✅ STDERR is correct
+  ===> +7.5 marks
+>>>> defrag/test2 <<<<
+✅ disk1: Matches expected disk
+✅ STDOUT is correct
+✅ STDERR is correct
+  ===> +7.5 marks
+======================================================
+==== Basic functionality ===
+======================================================
+>>>> consistency-checks/test1 <<<<
+✅ STDOUT is correct
+✅ STDERR is correct
+  ===> +1 marks
+>>>> consistency-checks/test2 <<<<
+✅ STDOUT is correct
+✅ STDERR is correct
+  ===> +3 marks
+>>>> consistency-checks/test3 <<<<
+✅ STDOUT is correct
+✅ STDERR is correct
+  ===> +3 marks
+>>>> consistency-checks/test4 <<<<
+✅ STDOUT is correct
+✅ STDERR is correct
+  ===> +3 marks
+>>>> consistency-checks/test5 <<<<
+✅ STDOUT is correct
+✅ STDERR is correct
+  ===> +3 marks
+>>>> consistency-checks/test6 <<<<
+✅ STDOUT is correct
+✅ STDERR is correct
+  ===> +3 marks
+>>>> consistency-checks/test7 <<<<
+✅ STDOUT is correct
+✅ STDERR is correct
+  ===> +3 marks
+>>>> consistency-checks/test8 <<<<
+✅ STDOUT is correct
+✅ STDERR is correct
+  ===> +1 marks
+======================================================
+==== Mounting file system ===
+======================================================
+>>>> cmd-error/test1 <<<<
+✅ disk1: Matches expected disk
+✅ STDOUT is correct
+✅ STDERR is correct
+  ===> +2.5 marks
+>>>> cmd-error/test2 <<<<
+✅ disk1: Matches expected disk
+✅ STDOUT is correct
+✅ STDERR is correct
+  ===> +2.5 marks
+>>>> cmd-error/test3 <<<<
+✅ disk1: Matches expected disk
+✅ STDOUT is correct
+✅ STDERR is correct
+  ===> +2.5 marks
+>>>> cmd-error/test4 <<<<
+✅ disk1: Matches expected disk
+✅ STDOUT is correct
+✅ STDERR is correct
+  ===> +2.5 marks
+======================================================
+==== Running valgrind - checking for memory leaks ===
+======================================================
+No memory leaks
